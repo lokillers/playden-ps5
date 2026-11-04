@@ -384,46 +384,9 @@ for name in FILES:
         total += 1
 print(f"Localized {len(ZH)} strings across {total} files")
 
-# Most drawing calls hand the renderer a Latin face directly, and a Latin face has no Han
-# glyphs, so translated text came out as question marks. Route every text call in the view
-# through a helper that first asks font_for() for a face that can draw the string.
-view = Path("src/homebrew/view.cpp")
-if view.exists():
-    text = view.read_text(encoding="utf-8")
-    if "zh_text(" in text:
-        print("Text fallback already applied")
-    else:
-        anchor = (
-            "            if (!preferred.font->has_glyph(codepoint) && cjk_.font != nullptr &&\n"
-            "                cjk_.font->has_glyph(codepoint))\n"
-            "                return cjk_;\n"
-            "        }\n"
-            "        return preferred;\n"
-            "    }\n"
-        )
-        if anchor not in text:
-            print("WARNING: font_for anchor missing; text keeps the Latin faces")
-        else:
-            text = text.replace("ui::text(", "zh_text(").replace("ui::paragraph(", "zh_paragraph(")
-            helpers = (
-                "\n"
-                "    // Draw with the face that actually has this string's glyphs: translated labels the\n"
-                "    // Latin faces cannot render would otherwise come out as question marks.\n"
-                "    template <typename Target, typename... Rest>\n"
-                "    void zh_text(Target &target, const ui::FontRef &face, std::string_view value, Rest... rest)\n"
-                "    {\n"
-                "        ui::text(target, font_for(value, face), value, rest...);\n"
-                "    }\n"
-                "\n"
-                "    template <typename Target, typename... Rest>\n"
-                "    void zh_paragraph(Target &target, const ui::FontRef &face, std::string_view value, Rest... rest)\n"
-                "    {\n"
-                "        ui::paragraph(target, font_for(value, face), value, rest...);\n"
-                "    }\n"
-            )
-            text = text.replace(anchor, anchor + helpers, 1)
-            view.write_text(text, encoding="utf-8")
-            print("Routed the view's text calls through the fallback face")
+# The renderer picks a face per font, not per glyph, and most drawing calls name a Latin face
+# directly. Rather than touch every call site, bake the Chinese-capable Noto face into the
+# slots the view already uses, so every string renders whatever it contains.
 
 # The CJK face is a pre-baked glyph atlas: characters missing from it draw as "?".
 # Feed every non-ASCII character the translations use into the atlas the build bakes,
@@ -440,10 +403,26 @@ Path("/tmp/zh-catalog.txt").write_text(combined, encoding="utf-8")
 build = Path("scripts/build-homebrew.sh")
 if build.exists():
     shell = build.read_text(encoding="utf-8")
-    old = "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|catalog-european"
-    new = "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|european,text=/tmp/zh-catalog.txt"
-    if old in shell:
-        build.write_text(shell.replace(old, new, 1), encoding="utf-8")
-        print(f"Baking {len(chars)} extra characters into the CJK atlas")
+    old_table = (
+        "Barlow-Regular.ttf|barlow-regular.huifont|european\n"
+        "Barlow-Medium.ttf|barlow-medium.huifont|european\n"
+        "Barlow-SemiBold.ttf|barlow-semibold.huifont|european\n"
+        "BarlowCondensed-Medium.ttf|barlow-condensed-medium.huifont|european\n"
+        "BarlowCondensed-SemiBold.ttf|barlow-condensed-semibold.huifont|european\n"
+        "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|catalog-european\n"
+    )
+    new_table = (
+        "NotoSansCJKsc-Regular.otf|barlow-regular.huifont|european,text=/tmp/zh-catalog.txt\n"
+        "NotoSansCJKsc-Regular.otf|barlow-medium.huifont|european,text=/tmp/zh-catalog.txt\n"
+        "NotoSansCJKsc-Regular.otf|barlow-semibold.huifont|european,text=/tmp/zh-catalog.txt\n"
+        "NotoSansCJKsc-Regular.otf|barlow-condensed-medium.huifont|european,text=/tmp/zh-catalog.txt\n"
+        "NotoSansCJKsc-Regular.otf|barlow-condensed-semibold.huifont|european,text=/tmp/zh-catalog.txt\n"
+        "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|european,text=/tmp/zh-catalog.txt\n"
+    )
+    if old_table in shell:
+        build.write_text(shell.replace(old_table, new_table, 1), encoding="utf-8")
+        print("Baking Noto CJK into every interface face")
+    elif "european,text=/tmp/zh-catalog.txt" in shell:
+        print("Interface faces already baked with Noto CJK")
     else:
-        print("WARNING: CJK font line not found; the atlas keeps its old characters")
+        print("WARNING: font table not found; the faces keep their old glyphs")
