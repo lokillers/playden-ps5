@@ -37,9 +37,11 @@ jobs:
           PY
 
       - name: Install build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew update
-          brew install cmake ninja pkgconf sdl2-compat llvm@18 python
+          brew install cmake ninja pkgconf llvm@18
           echo "$(brew --prefix llvm@18)/bin" >> "$GITHUB_PATH"
 
       - name: Fetch the pinned PS5 SDK and toolchain
