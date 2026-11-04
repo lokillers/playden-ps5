@@ -46,12 +46,11 @@ jobs:
                                       std::vector<ContentServer>* out) {
             // Steam answers cell 0 with the cell it guesses from the request address, and for this console
             // that is Los Angeles. The nearby cells are asked as well: 45 and 34 are served from Hong Kong
-            // and Singapore, 47 is Alibaba's mainland China CDN. The caller's own cell is the last resort.
+            // and Singapore, 47 is Alibaba's mainland China CDN. The caller's own cell is kept too, so the
+            // "Fastest" race can always fall back to the servers Steam itself picked.
             std::vector<std::uint32_t> cells;
-            for (const std::uint32_t nearby : {45u, 34u, 47u})
-              if (nearby != cell_id) cells.push_back(nearby);
-            const std::size_t nearby_count = cells.size();
-            cells.push_back(cell_id);
+            for (const std::uint32_t nearby : {45u, 34u, 47u, cell_id})
+              if (std::find(cells.begin(), cells.end(), nearby) == cells.end()) cells.push_back(nearby);
 
             std::vector<ContentServer> usable, plain;
             std::vector<std::string> seen;
@@ -60,8 +59,6 @@ jobs:
               return left.load < right.load;
             };
             for (std::size_t index = 0; index < cells.size() && !cancel; ++index) {
-              // The caller's own cell only fills in when none of the nearby cells listed anything.
-              if (index >= nearby_count && !usable.empty()) break;
               std::vector<std::uint8_t> body;
               const auto error = Get(
                   "https://api.steampowered.com/IContentServerDirectoryService/GetServersForSteamPipe/v1/?cell_id=" +
@@ -130,6 +127,26 @@ jobs:
           end = text.index(end_marker, start) + len(end_marker)
           path.write_text(text[:start] + replacement + text[end:])
           print("Patched", path)
+          PY
+
+      - name: Raise the download slot count
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          patch = Path("src/steam/backend/depot_installer.cpp")
+          text = patch.read_text()
+          old = "tuning.slots = std::clamp(value, 1, 8);"
+          if old not in text:
+              raise SystemExit("depot_installer.cpp: slot clamp not found")
+          patch.write_text(text.replace(old, "tuning.slots = std::clamp(value, 1, 32);", 1))
+          for name in ("src/homebrew/ps5.cpp", "src/homebrew/host.cpp"):
+              path = Path(name)
+              text = path.read_text()
+              old = "tuning.slots = 8;"
+              if old not in text:
+                  raise SystemExit(name + ": slot assignment not found")
+              path.write_text(text.replace(old, "tuning.slots = 16;", 1))
+          print("Patched download slots")
           PY
 
       - name: Install build tools
