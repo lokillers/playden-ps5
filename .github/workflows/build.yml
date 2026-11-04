@@ -167,7 +167,14 @@ jobs:
         run: scripts/build-lapy-helper.sh
 
       - name: Build the Playden PS5 app package
-        run: scripts/build-homebrew-ps5.sh
+        run: |
+          set -o pipefail
+          scripts/build-homebrew-ps5.sh 2>&1 | tee /tmp/playden-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -nE "error:|fatal error:|undefined reference|ninja: build stopped" /tmp/playden-build.log | head -8 | sed 's/^/::error::/' || true
+          fi
+          exit $status
 
       - name: Package the debug build
         run: |
