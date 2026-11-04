@@ -1,0 +1,56 @@
+name: Build Playden PS5 debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out Playden with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Apply the China/Alibaba TLS patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/steam/backend/http_client.cpp")
+          text = path.read_text()
+          anchor = '    PLAYDEN_SETOPT(CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);\n'
+          addition = (
+              '    // Steam Cloud in China is served from Alibaba OSS; its TLS 1.2\n'
+              '    // ServerKeyExchange uses RSA-PSS, which the PS5 Mbed TLS rejects.\n'
+              '    // Static-RSA AES-CBC avoids ServerKeyExchange entirely.\n'
+              '    if (request.url.find("aliyuncs.com") != std::string::npos) {\n'
+              '      PLAYDEN_SETOPT(CURLOPT_SSL_CIPHER_LIST, "AES128-SHA:AES256-SHA");\n'
+              '    }\n'
+          )
+          if anchor not in text:
+              raise SystemExit("http_client.cpp: TLS anchor not found")
+          path.write_text(text.replace(anchor, anchor + addition, 1))
+          print("Patched", path)
+          PY
+
+      - name: Install build tools
+        run: |
+          brew update
+          brew install cmake ninja pkgconf sdl2-compat llvm@18 python
+          echo "$(brew --prefix llvm@18)/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the pinned PS5 SDK and toolchain
+        run: scripts/fetch-deps.sh
+
+      - name: Build the Playden PS5 app package
+        run: scripts/build-homebrew-ps5.sh
+
+      - name: Upload the FAKE77031 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FAKE77031-debug
+          path: build/homebrew-ps5/dist/FAKE77031
+          if-no-files-found: error
