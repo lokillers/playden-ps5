@@ -135,17 +135,21 @@ jobs:
           from pathlib import Path
           patch = Path("src/steam/backend/depot_installer.cpp")
           text = patch.read_text()
-          old = "tuning.slots = std::clamp(value, 1, 8);"
-          if old not in text:
-              raise SystemExit("depot_installer.cpp: slot clamp not found")
-          patch.write_text(text.replace(old, "tuning.slots = std::clamp(value, 1, 32);", 1))
+          for old, new in (
+              ("tuning.slots = std::clamp(value, 1, 8);", "tuning.slots = std::clamp(value, 1, 32);"),
+              ("const int slots = std::clamp(tuning_.slots, 1, 8);", "const int slots = std::clamp(tuning_.slots, 1, 32);"),
+          ):
+              if old not in text:
+                  raise SystemExit("depot_installer.cpp: slot clamp not found: " + old)
+              text = text.replace(old, new, 1)
+          patch.write_text(text)
           for name in ("src/homebrew/ps5.cpp", "src/homebrew/host.cpp"):
               path = Path(name)
               text = path.read_text()
               old = "tuning.slots = 8;"
               if old not in text:
                   raise SystemExit(name + ": slot assignment not found")
-              path.write_text(text.replace(old, "tuning.slots = 16;", 1))
+              path.write_text(text.replace(old, "tuning.slots = 32;", 1))
           print("Patched download slots")
           PY
 
