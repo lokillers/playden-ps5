@@ -20,7 +20,6 @@ jobs:
 
       - name: Apply the China/Alibaba TLS patch
         run: |
-          python3 - <<'PY'
           from pathlib import Path
           path = Path("src/steam/backend/http_client.cpp")
           text = path.read_text()
@@ -37,7 +36,97 @@ jobs:
               raise SystemExit("http_client.cpp: TLS anchor not found")
           path.write_text(text.replace(anchor, anchor + addition, 1))
           print("Patched", path)
-          PY
+
+      - name: Write the China CDN cell patch source
+        run: |
+          cat > /tmp/cdn_servers.cpp <<'CPP'
+          CdnError CdnClient::Servers(std::uint32_t cell_id, const std::atomic<bool>& cancel,
+                                      std::vector<ContentServer>* out) {
+            // Steam answers cell 0 with the cell it guesses from the request address, and for this console
+            // that is Los Angeles. The nearby cells are asked as well: 45 and 34 are served from Hong Kong
+            // and Singapore, 47 is Alibaba's mainland China CDN. The caller's own cell is the last resort.
+            std::vector<std::uint32_t> cells;
+            for (const std::uint32_t nearby : {45u, 34u, 47u})
+              if (nearby != cell_id) cells.push_back(nearby);
+            const std::size_t nearby_count = cells.size();
+            cells.push_back(cell_id);
+
+            std::vector<ContentServer> usable, plain;
+            std::vector<std::string> seen;
+            std::size_t listed = 0;
+            const auto by_load = [](const ContentServer& left, const ContentServer& right) {
+              return left.load < right.load;
+            };
+            for (std::size_t index = 0; index < cells.size() && !cancel; ++index) {
+              // The caller's own cell only fills in when none of the nearby cells listed anything.
+              if (index >= nearby_count && !usable.empty()) break;
+              std::vector<std::uint8_t> body;
+              const auto error = Get(
+                  "https://api.steampowered.com/IContentServerDirectoryService/GetServersForSteamPipe/v1/?cell_id=" +
+                      std::to_string(cells[index]) + "&format=json",
+                  kMaxServerListDownloadBytes, 15'000, cancel, &body);
+              if (error == CdnError::kCanceled) return error;
+              if (error != CdnError::kNone) continue;
+              const std::string_view text(body.empty() ? "" : reinterpret_cast<const char*>(body.data()), body.size());
+              const auto root = json::Parse(text, json::Limits{512 * 1024, 8, 8192, 4096});
+              const auto* response = root ? root->Find("response") : nullptr;
+              const auto* servers = response ? response->Find("servers") : nullptr;
+              if (!servers || !servers->is_array()) continue;
+              std::vector<ContentServer> cell_usable, cell_plain;
+              for (const auto& server : servers->array()) {
+                ++listed;
+                const auto* type = server.Find("type");
+                const auto* host = server.Find("host");
+                const auto* vhost = server.Find("vhost");
+                const auto* https = server.Find("https_support");
+                const auto* load = server.Find("load");
+                const auto* priority = server.Find("priority_class");
+                if (!type || !type->is_string() || (type->text() != "SteamCache" && type->text() != "CDN")) continue;
+                if (!host || !host->is_string() || !ValidCdnHost(host->text())) continue;
+                if (std::find(seen.begin(), seen.end(), host->text()) != seen.end()) continue;
+                seen.push_back(host->text());
+                ContentServer entry;
+                entry.host = host->text();
+                entry.vhost = vhost && vhost->is_string() && ValidCdnHost(vhost->text()) ? vhost->text() : entry.host;
+                entry.https = !(https && https->is_string() && https->text() == "unavailable");
+                if (load) {
+                  if (const auto value = load->AsUint64(); value && *value < 100000) entry.load = static_cast<int>(*value);
+                }
+                if (priority) {
+                  if (const auto value = priority->AsUint64())
+                    entry.priority = static_cast<int>(std::min<std::uint64_t>(*value, 9));
+                }
+                (entry.https ? cell_usable : cell_plain).push_back(std::move(entry));
+              }
+              // Keep the cells in the order asked, so the nearest servers stay at the front of the list.
+              std::stable_sort(cell_usable.begin(), cell_usable.end(), by_load);
+              std::stable_sort(cell_plain.begin(), cell_plain.end(), by_load);
+              for (auto& server : cell_usable) usable.push_back(std::move(server));
+              for (auto& server : cell_plain) plain.push_back(std::move(server));
+            }
+            // Alibaba's mainland CDN is plain HTTP, so it is listed after every HTTPS server: "Test servers"
+            // and the "Fastest" race can still pick it, while an automatic choice prefers HTTPS.
+            for (auto& server : plain) usable.push_back(std::move(server));
+            if (usable.empty()) {
+              last_failure_ = "servers=" + std::to_string(listed) + " usable=0";
+              return CdnError::kProtocol;
+            }
+            *out = std::move(usable);
+            return CdnError::kNone;
+          }
+          CPP
+
+      - name: Apply the China CDN cell patch
+        run: |
+          from pathlib import Path
+          path = Path("src/steam/backend/cdn_client.cpp")
+          text = path.read_text()
+          replacement = Path("/tmp/cdn_servers.cpp").read_text().rstrip("\n") + "\n"
+          start = text.index("CdnError CdnClient::Servers(")
+          end_marker = "  *out = std::move(usable);\n  return CdnError::kNone;\n}\n"
+          end = text.index(end_marker, start) + len(end_marker)
+          path.write_text(text[:start] + replacement + text[end:])
+          print("Patched", path)
 
       - name: Install build tools
         env:
@@ -68,7 +157,7 @@ jobs:
           gh release create "debug-${{ github.run_number }}-${{ github.run_attempt }}" \
             "build/homebrew-ps5/dist/FAKE77031-debug.zip" \
             --title "Playden debug build ${{ github.run_number }}" \
-            --notes "Playden debug build with the Alibaba/Steam Cloud TLS static-RSA patch." \
+            --notes "Playden debug build: Alibaba/Steam Cloud TLS static-RSA patch, plus Hong Kong and Alibaba download cells." \
             --repo "${{ github.repository }}"
 
       - name: Upload the FAKE77031 package
