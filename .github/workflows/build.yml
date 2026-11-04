@@ -3,6 +3,9 @@ name: Build Playden PS5 debug
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
@@ -52,6 +55,21 @@ jobs:
 
       - name: Build the Playden PS5 app package
         run: scripts/build-homebrew-ps5.sh
+
+      - name: Package the debug build
+        run: |
+          cd build/homebrew-ps5/dist
+          ditto -c -k --sequesterRsrc --keepParent FAKE77031 FAKE77031-debug.zip
+
+      - name: Publish the debug build as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "debug-${{ github.run_number }}-${{ github.run_attempt }}" \
+            "build/homebrew-ps5/dist/FAKE77031-debug.zip" \
+            --title "Playden debug build ${{ github.run_number }}" \
+            --notes "Playden debug build with the Alibaba/Steam Cloud TLS static-RSA patch." \
+            --repo "${{ github.repository }}"
 
       - name: Upload the FAKE77031 package
         uses: actions/upload-artifact@v4
