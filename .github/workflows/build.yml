@@ -47,6 +47,9 @@ jobs:
       - name: Fetch the pinned PS5 SDK and toolchain
         run: scripts/fetch-deps.sh
 
+      - name: Build the Lapy root helper
+        run: scripts/build-lapy-helper.sh
+
       - name: Build the Playden PS5 app package
         run: scripts/build-homebrew-ps5.sh
 
