@@ -383,3 +383,26 @@ for name in FILES:
         path.write_text(text, encoding="utf-8")
         total += 1
 print(f"Localized {len(ZH)} strings across {total} files")
+
+# The CJK face is a pre-baked glyph atlas: characters missing from it draw as "?".
+# Feed every non-ASCII character the translations use into the atlas the build bakes,
+# by pointing the CJK font line at a catalog file that holds the original catalog text
+# plus this build's characters.
+chars = sorted({ch for value in ZH.values() for ch in value if ord(ch) > 0x7F})
+catalog = Path("fixtures/ui-comparison/catalog.json")
+if catalog.exists():
+    combined = catalog.read_text(encoding="utf-8") + "".join(chars)
+else:
+    combined = "".join(chars)
+Path("/tmp/zh-catalog.txt").write_text(combined, encoding="utf-8")
+
+build = Path("scripts/build-homebrew.sh")
+if build.exists():
+    shell = build.read_text(encoding="utf-8")
+    old = "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|catalog-european"
+    new = "NotoSansCJKsc-Regular.otf|noto-cjk-fallback.huifont|european,text=/tmp/zh-catalog.txt"
+    if old in shell:
+        build.write_text(shell.replace(old, new, 1), encoding="utf-8")
+        print(f"Baking {len(chars)} extra characters into the CJK atlas")
+    else:
+        print("WARNING: CJK font line not found; the atlas keeps its old characters")
