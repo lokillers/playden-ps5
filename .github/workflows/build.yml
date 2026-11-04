@@ -20,6 +20,7 @@ jobs:
 
       - name: Apply the China/Alibaba TLS patch
         run: |
+          python3 - <<'PY'
           from pathlib import Path
           path = Path("src/steam/backend/http_client.cpp")
           text = path.read_text()
@@ -36,6 +37,7 @@ jobs:
               raise SystemExit("http_client.cpp: TLS anchor not found")
           path.write_text(text.replace(anchor, anchor + addition, 1))
           print("Patched", path)
+          PY
 
       - name: Write the China CDN cell patch source
         run: |
@@ -118,6 +120,7 @@ jobs:
 
       - name: Apply the China CDN cell patch
         run: |
+          python3 - <<'PY'
           from pathlib import Path
           path = Path("src/steam/backend/cdn_client.cpp")
           text = path.read_text()
@@ -127,6 +130,7 @@ jobs:
           end = text.index(end_marker, start) + len(end_marker)
           path.write_text(text[:start] + replacement + text[end:])
           print("Patched", path)
+          PY
 
       - name: Install build tools
         env:
