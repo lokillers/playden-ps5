@@ -426,3 +426,39 @@ if build.exists():
         print("Interface faces already baked with Noto CJK")
     else:
         print("WARNING: font table not found; the faces keep their old glyphs")
+
+# Latency, not bandwidth, caps each connection: one chunk is a few hundred kilobytes and the
+# content servers sit 200-350 ms away, so the default receive window keeps a connection at a
+# few hundred KB/s however fast the line is. Ask the kernel for a window big enough to fill it.
+http = Path("src/steam/backend/http_client.cpp")
+if http.exists():
+    text = http.read_text(encoding="utf-8")
+    if "GrowReceiveBuffer" in text:
+        print("Receive buffer already grown")
+    else:
+        if "#include <sys/socket.h>" not in text:
+            old_include = "#include <strings.h>\n"
+            if old_include not in text:
+                raise SystemExit("http_client.cpp: include anchor not found")
+            text = text.replace(old_include, old_include + "\n#include <sys/socket.h>\n", 1)
+        anchor = "HttpError MapError(CURLcode code, const TransferBuffer& transfer, bool canceled) {"
+        if anchor not in text:
+            raise SystemExit("http_client.cpp: MapError anchor not found")
+        helper = (
+            "// A chunk is a few hundred kilobytes and the content servers are 200-350 ms away, so\n"
+            "// the default receive window caps one connection at a few hundred KB/s no matter how\n"
+            "// fast the line is. Ask the kernel for a window large enough to keep it busy.\n"
+            "int GrowReceiveBuffer(void*, curl_socket_t socket, curlsocktype purpose) {\n"
+            "  if (purpose != CURLSOCKTYPE_IPCXN) return CURL_SOCKOPT_OK;\n"
+            "  const int size = 2 * 1024 * 1024;\n"
+            "  setsockopt(socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const void*>(&size), sizeof(size));\n"
+            "  return CURL_SOCKOPT_OK;\n"
+            "}\n\n"
+        )
+        text = text.replace(anchor, helper + anchor, 1)
+        option = "    PLAYDEN_SETOPT(CURLOPT_TCP_KEEPALIVE, 1L);\n"
+        if option not in text:
+            raise SystemExit("http_client.cpp: TCP_KEEPALIVE anchor not found")
+        text = text.replace(option, option + "    PLAYDEN_SETOPT(CURLOPT_SOCKOPTFUNCTION, GrowReceiveBuffer);\n", 1)
+        http.write_text(text, encoding="utf-8")
+        print("Grew the download socket receive buffer")
